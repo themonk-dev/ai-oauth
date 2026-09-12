@@ -106,6 +106,32 @@ describe('redactSecrets', () => {
     expect(redactSecrets('{"refresh_token":"abc"}')).toBe('{"refresh_token":"abc"}')
   })
 
+  /*
+   * A guard on the shape of the pattern rather than on what it matches.
+   *
+   * Everything this function reads is a response body, which is attacker
+   * controlled and unbounded — `token.ts` reads it with no size cap, and
+   * `safeSnippet` redacts *before* it truncates, so the whole thing arrives
+   * here. That makes any ambiguity in the pattern a denial of service rather
+   * than a slow path: written once as `\s*\[?\s*`, the two whitespace runs
+   * could divide a run of spaces between them in O(N²) ways, and since the
+   * value class excludes whitespace every division was tried and failed. This
+   * input took 38 seconds of blocked event loop at 128 KB and 154 at 256 KB.
+   *
+   * The bound is deliberately loose. It is there to catch a return to
+   * quadratic behaviour, which overshoots it by four orders of magnitude, not
+   * to police milliseconds on a shared runner.
+   */
+  it('stays linear on a body built to make the pattern backtrack', () => {
+    const hostile = `refresh_token:${' '.repeat(256_000)}`
+
+    const started = performance.now()
+    redactSecrets(hostile)
+    const elapsed = performance.now() - started
+
+    expect(elapsed).toBeLessThan(1000)
+  })
+
   it('leaves ordinary text alone', () => {
     const text = 'The upstream service returned HTTP 502 from cloudfront.'
     expect(redactSecrets(text)).toBe(text)

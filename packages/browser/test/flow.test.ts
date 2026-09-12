@@ -16,6 +16,13 @@ const httpsOrigin: BrowserOrigin = { protocol: 'https:', hostname: 'app.example.
  */
 const cleartextOrigin: BrowserOrigin = { protocol: 'http:', hostname: 'tools.corp.lan', port: '' }
 
+/**
+ * The same dev server reached over IPv6. `location.hostname` keeps the brackets
+ * an IPv6 host is written with, so this is the spelling a real `Location`
+ * produces — and the one the loopback set has to hold for it to be recognised.
+ */
+const ipv6LoopbackOrigin: BrowserOrigin = { protocol: 'http:', hostname: '[::1]', port: '5173' }
+
 function expectPopup(resolution: BrowserFlowResolution): asserts resolution is Extract<
   BrowserFlowResolution,
   { flow: 'popup' }
@@ -148,6 +155,21 @@ describe('a non-loopback cleartext origin', () => {
 
     const ipLiteral: BrowserOrigin = { protocol: 'http:', hostname: '127.0.0.1', port: '3000' }
     expectPopup(resolveBrowserFlow(providers.claude, ipLiteral))
+  })
+
+  /*
+   * The bracketed spelling is the one a real `Location` hands over, so a
+   * loopback set holding a bare `::1` recognises no IPv6 origin at all. That
+   * was survivable while rule 1 caught everything cleartext; now that rule 1
+   * requires https, an unrecognised `[::1]` would drop a dev server from
+   * `popup` to a paste hint telling it to be served over https — advice that
+   * makes no sense for a machine talking to itself.
+   */
+  it('recognises the bracketed IPv6 loopback spelling a Location actually produces', () => {
+    const resolution = resolveBrowserFlow(providers.openrouter, ipv6LoopbackOrigin)
+
+    expectPopup(resolution)
+    expect(resolution.redirectUri).toBe('http://[::1]:5173/')
   })
 
   it('leaves genuine https origins entirely unaffected', () => {
