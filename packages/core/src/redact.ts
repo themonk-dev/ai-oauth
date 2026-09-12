@@ -30,9 +30,36 @@ const SECRET_PARAMS = [
  * Matches key, optional quotes, `:` or `=`, optional quotes, then the value up
  * to a delimiter — covering `{"refresh_token":"x"}` and `refresh_token=x&…`
  * alike.
+ *
+ * Every quote may be preceded by a backslash, because the body we are handed is
+ * routinely a *quoted* copy of another one. A gateway that echoes the request it
+ * proxied puts it inside a JSON string of its own, so what actually arrives here
+ * reads `{"upstream":"received {\"refresh_token\":\"rt-…\"}"}` — and this
+ * pattern only ever sees the outer document's raw text, never the unescaped
+ * value, because the snippet is scrubbed as text before anyone parses it. Made
+ * to require a bare quote, the `[:=]` landed on the backslash instead, the match
+ * failed, and a live refresh token went into the `OAuthError` message that
+ * `safeSnippet` builds and from there into the consumer's logs. The escaping can
+ * nest arbitrarily deep; one level is what a reflecting gateway produces and is
+ * as far as this goes.
+ *
+ * The optional `[` covers the other shape the same failure took: a value written
+ * as a one-element array, `{"refresh_token":["rt-…"]}`. Without it the bracket
+ * was taken as the first character of the value and the quote right behind it
+ * ended the value one character in, below the `{4,}` floor, so nothing matched
+ * at all. It stays inside the captured prefix, so the redacted text still shows
+ * that an array was there. A second element in that array is not covered — it
+ * carries no key of its own to anchor on, and inventing one would mean matching
+ * bare quoted strings anywhere, which is exactly the over-reach this pattern is
+ * shaped to avoid.
+ *
+ * `\` is deliberately absent from the value class. That class is the only thing
+ * stopping the value running past its own terminator; admitting a backslash
+ * would let it swallow the closing `\"` and keep going through whatever followed
+ * it, redacting the rest of the diagnostic along with the secret.
  */
 const PARAM_PATTERN = new RegExp(
-  String.raw`(["']?\b(?:${SECRET_PARAMS.join('|')})\b["']?\s*[:=]\s*)["']?([^"'&,}\s]{4,})["']?`,
+  String.raw`(\\?["']?\b(?:${SECRET_PARAMS.join('|')})\b\\?["']?\s*[:=]\s*\[?\s*)\\?["']?([^"'&,}\s]{4,})\\?["']?`,
   'gi',
 )
 

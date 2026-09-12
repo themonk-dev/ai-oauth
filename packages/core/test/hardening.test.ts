@@ -58,6 +58,54 @@ describe('redactSecrets', () => {
     expect(redactSecrets(`token was ${jwt}`)).not.toContain(jwt)
   })
 
+  /*
+   * The body a failing token request hands back is very often a *quoted* copy
+   * of another one: a gateway that reflects what it proxied embeds it in a JSON
+   * string of its own, so the text this sees carries `\"` where the inner
+   * document had `"`. The pattern used to insist on a bare quote, so `[:=]`
+   * landed on the backslash, nothing matched, and the refresh token travelled
+   * intact into the thrown message.
+   */
+  it('scrubs a credential inside an escaped JSON string, as a reflecting gateway sends it', () => {
+    const body = String.raw`{"upstream":"received {\"grant_type\":\"refresh_token\",\"refresh_token\":\"rt-super-secret\",\"client_id\":\"c\"}"}`
+    const redacted = redactSecrets(body)
+
+    expect(redacted).not.toContain('rt-super-secret')
+    expect(redacted).toContain(REDACTED)
+    // The rest of the diagnostic has to survive: the value class must stop at
+    // the escaped closing quote rather than running on through it.
+    expect(redacted).toContain('grant_type')
+    expect(redacted).toContain('client_id')
+  })
+
+  it('scrubs one in escaped text that is not JSON at all', () => {
+    const redacted = redactSecrets(String.raw`upstream error: received {\"refresh_token\":\"rt-super-secret\"}`)
+
+    expect(redacted).not.toContain('rt-super-secret')
+    expect(redacted).toContain('upstream error')
+  })
+
+  /*
+   * Same root cause, different shape. `[` is not excluded from the value class,
+   * so it was taken as the value's first character and the quote behind it
+   * ended the value one character in — under the `{4,}` floor, so the whole
+   * match failed and the array element went out verbatim.
+   */
+  it('scrubs an array-valued credential', () => {
+    const redacted = redactSecrets('{"refresh_token":["rt-super-secret"]}')
+
+    expect(redacted).not.toContain('rt-super-secret')
+    expect(redacted).toContain(REDACTED)
+  })
+
+  /*
+   * The `{4,}` floor is what keeps `code=ok` and friends out of the redaction.
+   * Widening the pattern around the value must not quietly lower it.
+   */
+  it('still leaves a value shorter than the four-character floor alone', () => {
+    expect(redactSecrets('{"refresh_token":"abc"}')).toBe('{"refresh_token":"abc"}')
+  })
+
   it('leaves ordinary text alone', () => {
     const text = 'The upstream service returned HTTP 502 from cloudfront.'
     expect(redactSecrets(text)).toBe(text)
